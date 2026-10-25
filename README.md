@@ -35,11 +35,11 @@ Install a version tag, so every install gets exactly the same code:
 npm install git+ssh://git@github.com/huseyinbozkurt/llm-adapter.git#v0.1.0
 ```
 
-This adds the following to your app's `package.json`:
+npm records it in your app's `package.json` in GitHub shorthand. npm still fetches it over SSH:
 
 ```json
 "dependencies": {
-  "llm-adapter": "git+ssh://git@github.com/huseyinbozkurt/llm-adapter.git#v0.1.0"
+  "llm-adapter": "github:huseyinbozkurt/llm-adapter#v0.1.0"
 }
 ```
 
