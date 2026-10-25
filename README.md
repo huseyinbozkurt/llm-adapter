@@ -5,6 +5,7 @@ One TypeScript API for many LLM providers. You switch providers by changing conf
 - **Native adapters:** OpenAI, Anthropic (Claude), Google Gemini, DeepSeek, OpenRouter, Groq, Mistral, xAI (Grok)
 - **Any OpenAI-compatible endpoint:** Ollama, LM Studio, vLLM, Together, Fireworks, your own gateway
 - Streaming, tool calling, structured output, images, reasoning controls, capability detection, middleware, retries, timeouts, cancellation
+- Request controllers: fallback, rule-based routing, rate limiting, and token/cost budgets
 - **No runtime dependencies.** It uses Node's built-in `fetch`, so you don't install any provider SDKs.
 
 Requires Node.js ≥ 20.3. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
@@ -13,9 +14,88 @@ Requires Node.js ≥ 20.3. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for 
 
 ## 1. Installation
 
+This is a private package. It is not published to npm. You install it straight from its private GitHub repository over SSH. npm clones the repository and builds `dist/` during the install, because the `prepare` script runs `npm run build`.
+
+### Prerequisites
+
+- **Node.js 20.3 or later.** Loading it with `require()` instead of `import` needs Node 20.19+ or 22.12+.
+- **An SSH key with read access to the repository.** Check it with:
+
 ```bash
-npm install llm-adapter
+ssh -T git@github.com
 ```
+
+  It should greet you by your GitHub username.
+
+### Install a released version (recommended)
+
+Install a version tag, so every install gets exactly the same code:
+
+```bash
+npm install git+ssh://git@github.com/huseyinbozkurt/llm-adapter.git#v0.1.0
+```
+
+This adds the following to your app's `package.json`:
+
+```json
+"dependencies": {
+  "llm-adapter": "git+ssh://git@github.com/huseyinbozkurt/llm-adapter.git#v0.1.0"
+}
+```
+
+The package name is still `llm-adapter`:
+
+```ts
+import { LLMClient } from "llm-adapter";
+```
+
+You can also install a branch (`#main`) or a commit (`#6c2c98a`) instead of a tag. Your `package-lock.json` records the exact commit either way.
+
+### Upgrade to a newer version
+
+Change the tag in your app's `package.json` (for example `#v0.1.0` → `#v0.2.0`), then reinstall:
+
+```bash
+npm install
+```
+
+### TypeScript projects
+
+Type definitions are included. Set `"moduleResolution"` to `"NodeNext"`, `"Node16"` or `"Bundler"` in your app's `tsconfig.json`. The old `"node"` setting won't find them.
+
+### CI and deployment servers
+
+The machine that runs `npm install` needs SSH access to the repository too. For CI, add a read-only [deploy key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys) to the repository and load its private key on the CI machine. In GitHub Actions you can do this with `webfactory/ssh-agent`.
+
+### Releasing a new version (maintainer)
+
+Run these from this repository's `main` branch. Tests must pass before you tag.
+
+```bash
+npm test
+```
+
+```bash
+npm version minor
+```
+
+```bash
+git push --follow-tags
+```
+
+`npm version` (`patch`, `minor` or `major`) updates `package.json`, commits, and creates the `vX.Y.Z` tag. Pushing the tag publishes the release. Apps then install it by putting that tag in their `package.json`.
+
+Nothing is ever sent to the public npm registry. `"private": true` in `package.json` makes `npm publish` refuse to run.
+
+### Local development without GitHub
+
+To try changes in another app before pushing, install from the local folder:
+
+```bash
+npm install /path/to/llm-adapter
+```
+
+This links the folder, so run `npm run build` here after each change.
 
 ## 2. Basic usage
 
@@ -374,6 +454,100 @@ const tuned = llm.withProviderOptions({ openai: { body: { seed: 7 } } });
 
 The library only reads the entry that matches the active provider. It merges that entry's `body` into the native request last, so it can override anything. This code is not portable, by design.
 
+## Request controllers
+
+The library has four controllers. Each one is either a provider or a piece of middleware, so they combine with each other and with your own middleware.
+
+### Fallback
+
+`FallbackProvider` tries its targets in order until one succeeds.
+
+```ts
+import { FallbackProvider, LLMClient } from "llm-adapter";
+
+const llm = new LLMClient(new FallbackProvider({
+  targets: {
+    primary: { provider: "anthropic", apiKey: process.env.ANTHROPIC_API_KEY!, model: "claude-opus-5" },
+    backup:  { provider: "openai",    apiKey: process.env.OPENAI_API_KEY!,    model: "gpt-5" },
+  },
+  onFallback: ({ target, error }) => console.warn(`${target} failed`, error),
+}));
+
+const res = await llm.chat({ messages });
+res.provider; // the target that actually answered
+```
+
+- **What triggers a fallback.** Errors another target might not share: rate limits or quota, 5xx, network errors, timeouts, bad credentials or an unknown model on that target, context length, capability gaps, and local budgets. You can change this with `shouldFallback`.
+- **What never triggers one.** Caller aborts, content-policy rejections and generally invalid requests, because those would fail on every target.
+- **Capabilities.** Targets whose capabilities can't serve the request are skipped.
+- **Streams.** A stream falls back only if it fails before its first event. After output has started, the error is rethrown.
+- **All targets fail.** You get a `FallbackExhaustedError` whose `.errors` lists every attempt.
+- **Models.** A per-request `model` is rejected, because model ids differ between providers. Set the model on each target instead.
+
+### Routing
+
+`RoutingProvider` picks one target per request using rules you write. It never makes decisions on its own.
+
+```ts
+import { RoutingProvider, hasImages, estimateInputTokens } from "llm-adapter";
+
+const llm = new LLMClient(new RoutingProvider({
+  targets: { fast: groqConfig, vision: openaiConfig, smart: anthropicConfig },
+  rules: [
+    { name: "images",  when: ({ request }) => hasImages(request), use: "vision" },
+    { name: "premium", when: ({ request }) => request.metadata?.tier === "premium", use: "smart" },
+    { name: "long",    when: ({ request }) => estimateInputTokens(request) > 50_000, use: "smart" },
+  ],
+  default: "fast",
+}));
+```
+
+- The first rule that matches and whose target can serve the request wins. If none does, the `default` target is used.
+- A target can itself be a `FallbackProvider`, for example `{ resilient: new FallbackProvider({...}) }`.
+- `estimateInputTokens` is a rough character-based estimate. Use it for coarse routing only.
+
+### Rate limiting
+
+```ts
+import { rateLimit } from "llm-adapter";
+
+llm.use(rateLimit({
+  requests: { limit: 60, intervalMs: 60_000 }, // sliding window
+  maxConcurrent: 4,                           // a stream holds its slot until it ends
+  maxWaitMs: 10_000,                          // after this, throw RateLimitError (code "local_rate_limit")
+  key: (ctx) => String(ctx.request.metadata?.userId), // optional: a separate limit per key
+}));
+```
+
+- Waiting is first-come, first-served, and it stops if the request's `AbortSignal` fires.
+- To share one limit across several clients, reuse the same middleware instance on each of them.
+- Inside a `FallbackProvider`, a target that hits its local limit makes the provider fall back to the next target.
+
+### Budgets
+
+```ts
+import { BudgetController } from "llm-adapter";
+
+const budget = new BudgetController({
+  limits: { maxTotalTokens: 2_000_000, maxCost: 25 },
+  // Your own rates, per million tokens. No prices ship with the library.
+  pricing: (provider, model) => myPriceTable[`${provider}/${model}`],
+  windowMs: 24 * 60 * 60 * 1000,                  // reset daily
+  key: (ctx) => String(ctx.request.metadata?.tenantId),
+  onUsage: (record) => metrics.record(record),
+});
+
+llm.use(budget.middleware());
+budget.spend("tenant-42");     // { requests, inputTokens, outputTokens, totalTokens, cost, ... }
+budget.remaining("tenant-42"); // { maxTotalTokens, maxCost }
+```
+
+- **When a limit is reached**, the next request throws `BudgetExceededError` before anything is sent.
+- **Soft limits.** Requests already in flight can push the total past a limit.
+- **Unpriced models.** If `maxCost` is set and your `pricing` function has no price for a model, the request is refused before it is sent.
+- **Streams.** Streams are metered from their `usage` event, including streams you stop reading early. Calls whose provider reports no usage are counted under `unmeteredRequests`.
+- **With fallback or routing.** Pricing looks up the client's own provider and model. When you use fallback or routing, attach the budget middleware to the target clients. One controller can be shared by all of them.
+
 ## 10. Error handling
 
 ```ts
@@ -381,6 +555,7 @@ import {
   LLMError, AuthenticationError, RateLimitError, TimeoutError, AbortError,
   InvalidRequestError, ContextLengthExceededError, ContentFilterError,
   ModelNotFoundError, ProviderError, NetworkError, UnsupportedCapabilityError,
+  BudgetExceededError, FallbackExhaustedError,
 } from "llm-adapter";
 
 try {

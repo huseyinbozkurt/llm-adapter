@@ -8,7 +8,7 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "default": "./dist/index.js"
     }
   },
   "files": [
@@ -27,7 +27,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run test/integration",
-    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+    "prepare": "npm run build"
   },
   "keywords": [
     "llm",
@@ -43,10 +43,14 @@
     "ai",
     "sdk"
   ],
-  "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.20.4",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2"
+  },
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/huseyinbozkurt/llm-adapter.git"
   }
 }

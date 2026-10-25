@@ -7,7 +7,7 @@
  * These make real, billed requests with small token limits.
  */
 import { describe, expect, it } from "vitest";
-import { LLMClient, type LLMConfig, type ToolDefinition } from "../../src/index.js";
+import { LLMClient, type ChatMessage, type LLMConfig, type ToolDefinition } from "../../src/index.js";
 
 interface LiveTarget {
   provider: string;
@@ -41,10 +41,13 @@ for (const t of targets) {
   const model = process.env[`${t.provider.toUpperCase()}_MODEL`] ?? t.defaultModel;
 
   describe.skipIf(!apiKey)(`live: ${t.provider} (${model})`, () => {
-    const client = new LLMClient({ provider: t.provider, apiKey, model, timeout: 120_000, ...t.extra } as LLMConfig);
+    // Built lazily: describe bodies run even when the block is skipped.
+    let cached: LLMClient | undefined;
+    const llm = () =>
+      (cached ??= new LLMClient({ provider: t.provider, apiKey, model, timeout: 120_000, ...t.extra } as LLMConfig));
 
     it("chat", async () => {
-      const res = await client.chat({
+      const res = await llm().chat({
         messages: [
           { role: "system", content: "Reply with exactly one word." },
           { role: "user", content: "Say hello." },
@@ -57,7 +60,7 @@ for (const t of targets) {
     });
 
     it("stream", async () => {
-      const stream = client.stream({ messages: [{ role: "user", content: "Count from 1 to 5." }], maxTokens: 2000 });
+      const stream = llm().stream({ messages: [{ role: "user", content: "Count from 1 to 5." }], maxTokens: 2000 });
       let deltas = 0;
       for await (const e of stream) if (e.type === "text_delta") deltas++;
       const final = await stream.finalResponse();
@@ -66,15 +69,15 @@ for (const t of targets) {
     });
 
     it("tool call round trip", async () => {
-      const messages: Parameters<typeof client.chat>[0]["messages"] = [
+      const messages: ChatMessage[] = [
         { role: "user", content: "What's the weather in Toronto? Use the tool." },
       ];
-      const first = await client.chat({ messages, tools: [weather], maxTokens: 2000 });
+      const first = await llm().chat({ messages, tools: [weather], maxTokens: 2000 });
       expect(first.toolCalls.length).toBeGreaterThan(0);
       const call = first.toolCalls[0]!;
       expect(JSON.parse(call.function.arguments)).toHaveProperty("city");
       messages.push(first.message, { role: "tool", toolCallId: call.id, content: JSON.stringify({ tempC: 21, sky: "clear" }) });
-      const second = await client.chat({ messages, tools: [weather], maxTokens: 2000 });
+      const second = await llm().chat({ messages, tools: [weather], maxTokens: 2000 });
       expect(second.text).toMatch(/21/);
     });
   });

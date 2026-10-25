@@ -36,6 +36,8 @@ export {
   UnsupportedCapabilityError,
   NetworkError,
   ConfigurationError,
+  BudgetExceededError,
+  FallbackExhaustedError,
   isLLMError,
   type LLMErrorOptions,
 } from "./core/errors.js";
@@ -55,6 +57,36 @@ export { OpenRouterAdapter } from "./providers/openrouter/OpenRouterAdapter.js";
 export { GroqAdapter } from "./providers/groq/GroqAdapter.js";
 export { MistralAdapter } from "./providers/mistral/MistralAdapter.js";
 export { XAIAdapter } from "./providers/xai/XAIAdapter.js";
+
+// Request controllers
+export {
+  FallbackProvider,
+  defaultShouldFallback,
+  type FallbackOptions,
+  type FallbackAttempt,
+} from "./controllers/FallbackProvider.js";
+export {
+  RoutingProvider,
+  hasImages,
+  hasTools,
+  estimateInputTokens,
+  type RoutingOptions,
+  type RoutingRule,
+  type RouteContext,
+} from "./controllers/RoutingProvider.js";
+export { RateLimiter, rateLimit, type RateLimiterOptions, type RateLimitMiddlewareOptions } from "./controllers/rateLimit.js";
+export {
+  BudgetController,
+  budget,
+  computeCost,
+  type BudgetOptions,
+  type BudgetLimits,
+  type BudgetSpend,
+  type ModelPrice,
+  type PriceLookup,
+  type UsageRecord,
+} from "./controllers/budget.js";
+export type { Target } from "./controllers/targets.js";
 
 // Registry
 export { ProviderRegistry, type ProviderFactory } from "./registry/ProviderRegistry.js";

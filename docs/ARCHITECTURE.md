@@ -66,3 +66,21 @@ Zero runtime dependencies. Every provider speaks HTTPS+JSON+SSE, which Node ≥ 
 - Retries: exponential backoff with full jitter, `Retry-After` / `retry-after-ms` respected (capped), only for `retryable` errors (429 except quota exhaustion, 408, 409, 5xx, transient network codes). Streams retry only while opening.
 - Each attempt gets its own controller combining the caller's signal and a timer; the timer resets on every stream chunk (idle timeout). Afterwards we know which fired: `AbortError` (caller) vs `TimeoutError` (retryable).
 - Secrets: auth headers are never logged; logger receives only method/path/status/timing. Error text and error `cause` bodies are passed through `redact()` (configured keys + key-shaped strings). Gemini auth uses a header, never a URL parameter.
+
+## Request controllers
+
+Controllers sit above adapters and reuse the two existing extension points, so none of them needs changes to `LLMClient`:
+
+| Controller | Kind | Why this kind |
+|---|---|---|
+| `FallbackProvider` | `LLMProvider` | It must call *different* targets, which middleware (bound to one provider) cannot do. |
+| `RoutingProvider` | `LLMProvider` | Same reason. It nests with `FallbackProvider` in either direction. |
+| `rateLimit` / `RateLimiter` | middleware | It gates a call without changing where the call goes. |
+| `BudgetController` | middleware | It meters `usage` and blocks new calls; it doesn't change where calls go. |
+
+Design notes:
+
+- **Targets are `LLMClient`s.** Each target keeps its own middleware, validation and structured-output fallback. A multi-target provider reports the *union* of its targets' capabilities, and skips any target that can't serve a given request.
+- **No per-request `model`.** Model ids are provider-specific, so a multi-target provider rejects a per-request `model` rather than ignoring it.
+- **Streams commit on the first event.** A stream falls back only before its first event, because output already delivered cannot be taken back.
+- **Budgets use caller-supplied rates.** No prices ship with the library, and spend is checked before each call, which makes limits soft under concurrency. Rate limiting and budgets both accept a `key(ctx)` function for per-tenant limits.

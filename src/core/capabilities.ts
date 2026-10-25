@@ -59,7 +59,8 @@ export function resolveCapabilities(
   return overrides ? { ...caps, ...overrides } : caps;
 }
 
-function hasImages(request: ChatRequest): boolean {
+/** True when any message contains an image part. */
+export function hasImages(request: ChatRequest): boolean {
   return request.messages.some(
     (m) => Array.isArray(m.content) && m.content.some((p) => p.type === "image"),
   );

@@ -64,6 +64,31 @@ export class TimeoutError extends LLMError {}
 export class AbortError extends LLMError {}
 export class ConfigurationError extends LLMError {}
 
+/** A local budget (tokens / cost) is exhausted. Raised before any request is sent. */
+export class BudgetExceededError extends LLMError {
+  readonly limit: string;
+  constructor(limit: string, message: string, options: LLMErrorOptions = {}) {
+    super(message, { code: "budget_exceeded", ...options, retryable: false });
+    this.limit = limit;
+  }
+}
+
+/** Every target of a FallbackProvider failed. `errors` lists each attempt in order. */
+export class FallbackExhaustedError extends LLMError {
+  readonly errors: ReadonlyArray<{ target: string; error: unknown }>;
+  constructor(errors: ReadonlyArray<{ target: string; error: unknown }>, options: LLMErrorOptions = {}) {
+    const summary = errors
+      .map((e) => `${e.target}: ${e.error instanceof Error ? e.error.name : "Error"}`)
+      .join(", ");
+    super(`All fallback targets failed (${summary}).`, {
+      ...options,
+      retryable: errors.some((e) => e.error instanceof LLMError && e.error.retryable),
+      cause: errors[errors.length - 1]?.error,
+    });
+    this.errors = errors;
+  }
+}
+
 export class UnsupportedCapabilityError extends LLMError {
   readonly capability: string;
   constructor(capability: string, message: string, options: LLMErrorOptions = {}) {
